@@ -1,0 +1,583 @@
+#include <IRremote.h>
+
+#define dcp_pwm 5
+#define dcp_fw  4
+#define dcp_rw  3
+#define dcl_pwm 6
+#define dcl_fw  10
+#define dcl_rw  9
+
+#define trigger  8
+#define echo  7
+#define RECEIVER_PIN 2 // define the IR receiver pin
+
+IRrecv receiver(RECEIVER_PIN); // create a receiver object of the IRrecv class
+decode_results results; // create a results object of the decode_results class
+unsigned long key_value = 0; // variable to store the pressed key value
+
+int state = 1;
+int state_auto = 1;
+int counter = 0;
+volatile int pwm = 0;
+int light = 0;
+int odczyty_foto[8];
+int swiatlo_l = 0;
+int swiatlo_p = 0;
+int speed = 0;
+int dystans = 0;
+int obs_dist;
+int obs_dist_l;
+int obs_dist_p;
+unsigned long czas_pocz = 0;
+unsigned long czas = 0;
+unsigned long droga = 0;
+unsigned long droga_poprz = 0;
+unsigned long droga_plus = 0;
+unsigned long droga_poprz_plus = 0;
+unsigned long droga_minus = 0;
+unsigned long droga_poprz_minus = 0;
+int obrot_plus = 0;
+int obrot_plus_poprz = 0;
+int obrot_minus = 0;
+int obrot_minus_poprz = 0;
+int odchylenie = 0; // kat odchylenia od pozycji pocz¹tkowej [deg]
+int odchylenie_poprz = 0;
+int srednica = 68; // srednica kola [mm]
+int rozstaw = 200; // rozstaw kol [mm]
+
+void setup()
+{
+  Serial.begin(9600); // begin serial communication with a baud rate of 9600
+  receiver.enableIRIn(); // enable the receiver
+  receiver.blink13(true); // enable blinking of the built-in LED when an IR signal is received
+  
+  pinMode(A0, INPUT);
+  
+  pinMode(trigger, OUTPUT);
+  pinMode(echo, INPUT);
+  
+  pinMode(dcl_pwm, OUTPUT);
+  pinMode(dcl_fw, OUTPUT);
+  pinMode(dcl_rw, OUTPUT);
+  
+  pinMode(dcp_pwm, OUTPUT);
+  pinMode(dcp_fw, OUTPUT);
+  pinMode(dcp_rw, OUTPUT);
+  
+}
+
+void loop()
+{
+	
+  light = map(analogRead(A0), 0, 1023, 0, 100);
+  //Serial.println("Natezenie swiatla [%]:")
+  //Serial.println(light);
+  
+  obs_dist = czujnik_odl();
+  //Serial.println("Odleglosc od przeszkody [cm]:")
+  //Serial.println(obs_dist);
+  
+  
+  
+  
+  switch(state) {
+    case 1:
+    Serial.println("Jazda do przodu lub do tylu");
+    if (receiver.decode(&results)) {
+      if (results.value==0xFD28D7) {	// przycisk 4
+        counter = 0;
+        pwm = 0;
+        droga_poprz = droga;
+        state = 3; // obrot w lewo
+      }
+      if (results.value==0xFD08F7) {	// przycisk 1 - przelaczenie na dzialanie autonomiczne
+        counter = 0;
+        pwm = 0;
+        droga_poprz = droga;
+        state_auto = 1;
+        state = 4; // dzialanie autonomiczne
+      }
+      else if (results.value==0xFD6897) {	// przycisk 6
+        counter = 0;
+        pwm = 0;
+        droga_poprz = droga;
+        state = 2; // obrot w prawo
+      }
+      else if ((results.value==0xFD807F)||(results.value==0xFD906F)) { // zmiana predkosci
+        
+        droga_poprz = droga;
+        czas_pocz = millis();
+        
+        if (results.value==0xFD807F) { // vol +
+          counter++;
+          if (counter >= 10) counter = 10;
+        }
+        else if (results.value==0xFD906F) { // vol -
+         counter--;
+         if (counter <= -10) counter = -10;
+        }
+      }
+      receiver.resume();
+    }
+    pwm = map(abs(counter), 0, 10, 0, 255);
+    speed = map(pwm, 0, 255, 0, 150);
+    czas = millis() - czas_pocz; // czas, jaki uplynal od ostatniej zmiany predkosci
+    droga = droga_poprz + speed*czas*3.14*srednica*1/60000;
+    //Serial.println(droga);
+    //Serial.println(droga_poprz);
+    
+    if (counter >= 0) jazda_przod(counter);
+    else jazda_tyl(counter);
+    
+    break;
+  
+    case 2:
+    Serial.println("Obrot w prawo");
+    if (receiver.decode(&results)) {
+      if (results.value==0xFD08F7) {	// przycisk 1 - przelaczenie na dzialanie autonomiczne
+        counter = 0;
+        pwm = 0;
+        droga_poprz_minus = droga_minus;
+        state_auto = 1;
+        state = 4; // dzialanie autonomiczne
+      }
+      if (results.value==0xFD8877) {	// przycisk 2
+        counter = 0;
+        pwm = 0;
+        droga_poprz_minus = droga_minus;
+        state = 1;	// jazda do przodu
+      }
+      else if (results.value==0xFD28D7) {	// przycisk 4
+        counter = 0;
+        pwm = 0;
+        droga_poprz_minus = droga_minus;
+        state = 3; // obrot w lewo
+      }
+      else if ((results.value==0xFD807F)||(results.value==0xFD906F)) { // zmiana predkosci
+        
+        droga_poprz_minus = droga_minus;
+        czas_pocz = millis();
+        
+        if (results.value==0xFD807F) { // vol +
+          counter++;
+          if (counter >= 10) counter = 10;
+        }
+        else if (results.value==0xFD906F) { // vol -
+         counter--;
+         if (counter <= 0) counter = 0;
+        }
+      }
+      receiver.resume();
+    }
+    pwm = map(abs(counter), 0, 10, 0, 255);
+    speed = map(pwm, 0, 255, 0, 150);
+    czas = millis() - czas_pocz; // czas, jaki uplynal od ostatniej zmiany predkosci
+    droga_minus = droga_poprz_minus + speed*czas*3.14*srednica*1/60000;
+    //obrot_minus = (droga_minus*360)/(3.14*srednica);
+    
+     digitalWrite(dcl_fw, HIGH); 
+     digitalWrite(dcl_rw, LOW);
+      
+     digitalWrite(dcp_fw, LOW); 
+     digitalWrite(dcp_rw, HIGH);
+    
+    analogWrite(dcl_pwm, pwm);
+    analogWrite(dcp_pwm, pwm);
+    
+    break;
+    
+    case 3:
+    Serial.println("Obrot w lewo");
+    if (receiver.decode(&results)) {
+      if (results.value==0xFD08F7) {	// przycisk 1 - przelaczenie na dzialanie autonomiczne
+        counter = 0;
+        pwm = 0;
+        droga_poprz_plus = droga_plus;
+        state_auto = 1;
+        state = 4; // dzialanie autonomiczne
+      }
+      if (results.value==0xFD8877) {	// przycisk 2
+        counter = 0;
+        pwm = 0;
+        droga_poprz_plus = droga_plus;
+        state = 1;	// jazda do przodu
+      }
+      else if (results.value==0xFD6897) {	// przycisk 6
+        counter = 0;
+        pwm = 0;
+        droga_poprz_plus = droga_plus;
+        state = 2; // obrot w prawo
+      }
+      else if ((results.value==0xFD807F)||(results.value==0xFD906F)) { // zmiana predkosci
+        
+        droga_poprz_plus = droga_plus;
+        czas_pocz = millis();
+        
+        if (results.value==0xFD807F) { // vol +
+          counter++;
+          if (counter >= 10) counter = 10;
+        }
+        else if (results.value==0xFD906F) { // vol -
+         counter--;
+         if (counter <= 0) counter = 0;
+        }
+      }
+      receiver.resume();
+    }
+    pwm = map(abs(counter), 0, 10, 0, 255);
+    speed = map(pwm, 0, 255, 0, 150);
+    czas = millis() - czas_pocz; // czas, jaki uplynal od ostatniej zmiany predkosci
+    droga_plus = droga_poprz_plus + speed*czas*3.14*srednica*1/60000;
+    //obrot_plus = (droga_plus*360)/(3.14*srednica);
+    
+    
+     digitalWrite(dcl_fw, LOW); 
+     digitalWrite(dcl_rw, HIGH);
+      
+     digitalWrite(dcp_fw, HIGH); 
+     digitalWrite(dcp_rw, LOW);
+    
+    analogWrite(dcl_pwm, pwm);
+    analogWrite(dcp_pwm, pwm);
+    
+    break;
+    
+    case 4:
+    Serial.println("Dzialanie autonomiczne");
+    if (receiver.decode(&results)) {
+      if (results.value==0xFD30CF) {	// przycisk 0 - prze³¹czenie na zdalne sterowanie
+        counter = 0;
+        pwm = 0;
+        droga_poprz_plus = droga_plus;
+        state = 1;	// zdalnie sterowana jazda do przodu
+      }
+      receiver.resume();
+    }
+    switch(state_auto) {
+      case 1:	// poczatek dzialania
+      stop();
+      while (obs_dist <= 15) {
+        obs_dist = czujnik_odl();
+        //Serial.println(obs_dist);
+        jazda_tyl(1);
+      }
+      stop();
+      odchylenie_poprz = odchylenie;
+      if (obs_dist > 15) state_auto = 2;
+      break;
+      
+      case 2:	// wstêpny obrot z zapisem odczytow z fotorezystora co 45 stopni
+      
+      for (int i = 0; i < 8; i++) {
+       odczyty_foto[i] = light;
+       droga_poprz_plus = droga_plus;
+       //obrot_plus_poprz = obrot_plus;
+       counter = 2;
+       speed = map(abs(counter), 0, 10, 0, 150);
+       czas_pocz = millis();
+       obrot_lewo(counter, 45, czas_pocz);
+       czas = millis() - czas_pocz;
+       droga_plus = droga_poprz_plus + speed*czas*3.14*srednica*1/60000;
+       obrot_plus = (droga_plus*360)/(3.14*rozstaw);
+       Serial.println(obrot_plus);
+       stop();
+       delay(500);
+        
+        //odchylenie_poprz = odchylenie;
+      }
+      
+      if (obs_dist < 25) {
+       stop();
+       state_auto = 5;
+      }
+      
+      else if ((obs_dist >= 25)&&(obs_dist < 100)) {
+       state_auto = 4;
+      }
+      
+      else if (obs_dist >= 100) {
+       state_auto = 3;
+      }
+      
+      break;
+      
+      case 3:	// jazda do przodu - pelna predkosc
+      if ((obs_dist >= 25)&&(obs_dist < 100)) {
+       state_auto = 4;
+      }
+      jazda_przod(10);
+      
+      break;
+      
+      case 4:	// jazda do przodu - predkosc proporcjonalna
+      if (obs_dist < 25) {
+       stop();
+       state_auto = 5;
+      }
+      
+      else if (obs_dist >= 100) {
+       state_auto = 3;
+      }
+      
+      counter = map(obs_dist, 25, 100, 1, 10);
+      jazda_przod(counter);
+      
+      break;
+      
+      case 5:	// badanie otoczenia po zatrzymaniu przed przeszkoda i wybor nowego kierunku
+      counter = 0;
+      pwm = 0;
+      obs_dist_l = 0;
+      obs_dist_p = 0;
+      swiatlo_l = 0;
+      swiatlo_p = 0;
+      delay(500);
+      
+      droga_poprz_plus = droga_plus;
+       //obrot_plus_poprz = obrot_plus;
+      counter = 3;
+      speed = map(abs(counter), 0, 10, 0, 150);
+      czas_pocz = millis();
+      obrot_lewo(counter, 90, czas_pocz);
+      czas = millis() - czas_pocz;
+      droga_plus = droga_poprz_plus + speed*czas*3.14*srednica*1/60000;
+      obrot_plus = (droga_plus*360)/(3.14*rozstaw);
+      Serial.println(obrot_plus);
+      stop();
+      delay(500);
+      
+      obs_dist_l = obs_dist;
+      swiatlo_l = light;
+      
+      
+      droga_poprz_plus = droga_plus;
+       //obrot_plus_poprz = obrot_plus;
+      counter = 3;
+      speed = map(abs(counter), 0, 10, 0, 150);
+      czas_pocz = millis();
+      obrot_lewo(counter, 180, czas_pocz);
+      czas = millis() - czas_pocz;
+      droga_plus = droga_poprz_plus + speed*czas*3.14*srednica*1/60000;
+      obrot_plus = (droga_plus*360)/(3.14*rozstaw);
+      Serial.println(obrot_plus);
+      stop();
+      delay(500);
+      
+      obs_dist_p = obs_dist;
+      swiatlo_p = light;
+      
+      // decyzja o nowym kierunku jazdy:
+      // -jazda na prawo od przeszkody:
+      
+      if (((swiatlo_p > swiatlo_l)||(obs_dist_l < 25))&&(obs_dist_p >= 25)) {
+        if (obs_dist < 100)) {
+        state_auto = 4;
+        }
+        else if (obs_dist >= 100) {
+        state_auto = 3;
+        }
+      }
+      // -jazda na lewo od przeszkody:
+      else if (((swiatlo_p < swiatlo_l)||(obs_dist_p < 25))&&(obs_dist_l >= 25)) {
+        droga_poprz_plus = droga_plus;
+        //obrot_plus_poprz = obrot_plus;
+        counter = 3;
+        speed = map(abs(counter), 0, 10, 0, 150);
+        czas_pocz = millis();
+        obrot_lewo(counter, 180, czas_pocz);
+        czas = millis() - czas_pocz;
+        droga_plus = droga_poprz_plus + speed*czas*3.14*srednica*1/60000;
+        obrot_plus = (droga_plus*360)/(3.14*rozstaw);
+        Serial.println(obrot_plus);
+        stop();
+        delay(500);
+        
+        if (obs_dist < 100)) {
+        state_auto = 4;
+        }
+        else if (obs_dist >= 100) {
+        state_auto = 3;
+        }
+        
+      }
+      else if (swiatlo_p = swiatlo_l) {
+        if (obs_dist_p >= obs_dist_l) {
+          if (obs_dist < 100)) {
+          state_auto = 4;
+          }
+          else if (obs_dist >= 100) {
+          state_auto = 3;
+          }
+          else state_auto = 5;
+        }
+        else if (obs_dist_l >= 25) {
+          droga_poprz_plus = droga_plus;
+          //obrot_plus_poprz = obrot_plus;
+          counter = 3;
+          speed = map(abs(counter), 0, 10, 0, 150);
+          czas_pocz = millis();
+          obrot_lewo(counter, 180, czas_pocz);
+          czas = millis() - czas_pocz;
+          droga_plus = droga_poprz_plus + speed*czas*3.14*srednica*1/60000;
+          obrot_plus = (droga_plus*360)/(3.14*rozstaw);
+          Serial.println(obrot_plus);
+          stop();
+          delay(500);
+        
+          if (obs_dist < 100)) {
+          state_auto = 4;
+          }
+          else if (obs_dist >= 100) {
+          state_auto = 3;
+          }
+        }
+        
+      }
+      
+        
+      break;
+      
+      case 6:
+      
+      
+      break;
+        
+      
+      
+    } // koniec switcha w dzia³aniu autonomicznym
+  
+  } // koniec switcha ogólnego
+  
+  //odchylenie = (droga_plus - droga_minus)*360/(3.14*srednica);
+  
+  obrot_minus = (droga_minus*360)/(3.14*rozstaw);
+  obrot_plus = (droga_plus*360)/(3.14*rozstaw);
+  odchylenie = obrot_plus - obrot_minus;
+  //if (odchylenie >= 360) odchylenie = odchylenie - 360;
+  //if (odchylenie <= -360) odchylenie = odchylenie + 360;
+  
+  //speed = map(pwm, 0, 255, 0, 150);
+  //Serial.println(pwm);
+  //Serial.println(speed);
+  //Serial.println(czas);
+  //Serial.println(droga);
+  //Serial.println(droga_plus);
+  //Serial.println(droga_minus);
+  //Serial.println(odchylenie);
+  //Serial.println(obrot_plus);
+  //Serial.println(obrot_minus);
+  //Serial.println(odczyty_foto[0]);
+  
+  
+  
+}  // koniec funkcji loop
+
+/* ---------------------------------------------------------------------------------- */
+
+long czujnik_odl() {
+  long dur, odleglosc;
+ 
+  digitalWrite(trigger, LOW);
+  delayMicroseconds(5);
+  digitalWrite(trigger, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigger, LOW);
+ 
+  dur = pulseIn(echo, HIGH);
+  odleglosc = dur*1.875 / 58;
+ 
+  return odleglosc;
+}
+
+
+void jazda_przod(int licznik) {
+  pwm = map(abs(licznik), 0, 10, 0, 255);
+  
+  digitalWrite(dcl_fw, HIGH); 
+  digitalWrite(dcl_rw, LOW);
+      
+  digitalWrite(dcp_fw, HIGH); 
+  digitalWrite(dcp_rw, LOW);
+  
+  analogWrite(dcl_pwm, pwm);
+  analogWrite(dcp_pwm, pwm);
+}
+
+
+void jazda_tyl(int licznik) {
+  pwm = map(abs(licznik), 0, 10, 0, 255);
+  
+  digitalWrite(dcl_fw, LOW); 
+  digitalWrite(dcl_rw, HIGH);
+      
+  digitalWrite(dcp_fw, LOW); 
+  digitalWrite(dcp_rw, HIGH);
+  
+  analogWrite(dcl_pwm, pwm);
+  analogWrite(dcp_pwm, pwm);
+}
+
+
+void obrot_lewo(int licznik, int kat, long t_pocz) {
+  int n;
+  long t, delta = 0;
+  float luk;
+  //t_pocz = millis();
+  pwm = map(abs(licznik), 0, 10, 0, 255);
+  n = map(pwm, 0, 255, 0, 150);
+  luk = kat*3.14*rozstaw/360.0;
+  t = (luk*60000)/(n*3.14*srednica);
+  
+  digitalWrite(dcl_fw, LOW); 
+  digitalWrite(dcl_rw, HIGH);
+      
+  digitalWrite(dcp_fw, HIGH); 
+  digitalWrite(dcp_rw, LOW);
+    
+  analogWrite(dcl_pwm, pwm);
+  analogWrite(dcp_pwm, pwm);
+  
+  while (delta <= t) delta = millis() - t_pocz;
+  
+  if (delta >= t) pwm = 0;
+}
+
+
+void obrot_prawo(int licznik) {
+  pwm = map(abs(licznik), 0, 10, 0, 255);
+  
+  digitalWrite(dcl_fw, HIGH); 
+  digitalWrite(dcl_rw, LOW);
+      
+  digitalWrite(dcp_fw, LOW); 
+  digitalWrite(dcp_rw, HIGH);
+    
+  analogWrite(dcl_pwm, pwm);
+  analogWrite(dcp_pwm, pwm);
+}
+
+void stop() {
+  pwm = 0;
+  counter = 0;
+  
+  digitalWrite(dcl_fw, LOW); 
+  digitalWrite(dcl_rw, LOW);
+      
+  digitalWrite(dcp_fw, LOW); 
+  digitalWrite(dcp_rw, LOW);
+}
+
+
+//int regulacja_predkosci(
+
+
+/*
+int obl_drogi(int predkosc) {
+  long czas;
+  
+  
+  int droga_czastkowa = 0;
+  
+  return droga_czastkowa;
+}
+*/
